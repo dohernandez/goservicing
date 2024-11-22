@@ -1,0 +1,19 @@
+name: check
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  branch-name:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Check branch name
+        uses: ./.github/actions/check-branch/
+        with:
+          types: ${{env.types}}
+          separators: ${{env.separators}}

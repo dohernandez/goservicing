@@ -163,7 +163,7 @@ func TestServiceGroup_Start(t *testing.T) {
 				close(done)
 			}()
 
-			srv := tt.args.srv.(*service) // nolint: errcheck
+			srv := tt.args.srv.(*service) //nolint:errcheck
 
 			// wait for the service start
 			select {
@@ -217,7 +217,7 @@ func TestServiceGroup_Start_timeout(t *testing.T) {
 		return
 	case <-time.After(time.Second):
 		// Start successfully, proceed to close
-		sg.Close() // nolint: errcheck, gosec
+		sg.Close() //nolint:errcheck,gosec
 	}
 
 	select {
@@ -254,7 +254,7 @@ func TestServiceGroup_Close(t *testing.T) {
 		return
 	case <-time.After(time.Second):
 		// Start successfully, proceed to close
-		sg.Close() // nolint: errcheck, gosec
+		sg.Close() //nolint:errcheck,gosec
 	}
 
 	select {

@@ -1,0 +1,69 @@
+name: release
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.23.x
+
+      - name: Get Merged PR Branch
+        id: get-branch
+        run: |
+          PR_BRANCH=$(jq -r '.pull_request.head.ref' "$GITHUB_EVENT_PATH")
+          echo "Merged PR Branch: $PR_BRANCH"
+          echo "PR_BRANCH=$PR_BRANCH" >> $GITHUB_ENV
+
+      - name: Determine level
+        id: determine-level
+        run: |
+          case "${{ env.PR_BRANCH }}" in
+            patch* | issue* | hotfix* | dependabot* | whitesource/*)
+              LEVEL="patch";;
+            minor* | feature* | feat*)
+              LEVEL="minor";;
+            major* | release*)
+              LEVEL="major";;
+            *)
+              LEVEL="unknown";;
+          esac
+          echo "Determined level: $LEVEL"
+          echo "LEVEL=$LEVEL" >> $GITHUB_ENV
+
+      - name: Get latest tag
+        id: latest_tag
+        uses: actions-ecosystem/action-get-latest-tag@v1
+
+      - name: Bump release version
+        id: bump_version
+        uses: actions-ecosystem/action-bump-semver@v1
+        with:
+          current_version: ${{ steps.latest_tag.outputs.tag }}
+          level: ${{ env.LEVEL }}
+
+      - name: Get Merge Commit Message
+        id: get_merge_commit_message
+        run: |
+          MERGE_COMMIT_MESSAGE=$(git log --merges --format=%B -n 1)
+          echo "Merge Commit Message: $MERGE_COMMIT_MESSAGE"
+          echo "$MERGE_COMMIT_MESSAGE" > ${{ github.workspace }}-CHANGELOG.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          body_path: ${{ github.workspace }}-CHANGELOG.txt
+          tag_name: ${{ steps.bump_version.outputs.new_version }}
+          token: ${{ secrets.GITHUB_TOKEN }}

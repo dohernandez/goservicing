@@ -1,17 +1,22 @@
-# This script is provided by github.com/bool64/dev.
 name: cloc
 on:
   pull_request:
+
+# Cancel the workflow in progress in newer build is about to start.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   cloc:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           path: pr
       - name: Checkout base code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: base
@@ -20,11 +25,11 @@ jobs:
         run: |
           curl -OL https://github.com/vearutop/sccdiff/releases/download/v1.0.1/linux_amd64.tar.gz && tar xf linux_amd64.tar.gz
           OUTPUT=$(cd pr && ../sccdiff -basedir ../base)
-          OUTPUT="${OUTPUT//'%'/'%25'}"
-          OUTPUT="${OUTPUT//$'\n'/'%0A'}"
-          OUTPUT="${OUTPUT//$'\r'/'%0D'}"
-          echo "::set-output name=diff::$OUTPUT"
-
+          {
+            echo "diff<<EOF"
+            echo "$OUTPUT"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
       - name: Comment Code Lines
         uses: marocchino/sticky-pull-request-comment@v2
         with:
@@ -32,5 +37,4 @@ jobs:
           header: LOC
           message: |
             ### Lines Of Code
-
             ${{ steps.loc.outputs.diff }}

@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/" # Location go.mod
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 1
+    groups:
+      dependencies:
+        patterns:
+          - "*" # Update all dependencies
+        update-types:
+          - "minor"
+          - "patch"

@@ -1,0 +1,16 @@
+name: 'Check Branch'
+description: 'Check branch name'
+
+inputs:
+  types:
+    description: "Provide custom types if you don't want the default ones from major|release|minor|feature|patch|issue|hotfix|dependabot|whitesource/"
+    required: false
+  separators:
+    description: "Provide custom separators if you don't want the default ones from -|/"
+    required: false
+
+runs:
+  using: "composite"
+  steps:
+    - run: ${{ github.action_path }}/check-branch.sh "${{ inputs.types }}" "${{ inputs.separators }}"
+      shell: bash

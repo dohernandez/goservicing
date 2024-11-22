@@ -43,13 +43,11 @@ func (s *service) WithSleepOnShutdown(sleepOnShutdownFunc func()) *service {
 	return s
 }
 
-func (s *service) WithShutdownSignal(shutdown <-chan struct{}, done chan<- struct{}) goservicing.Service {
+func (s *service) WithShutdownSignal(shutdown <-chan struct{}, done chan<- struct{}) {
 	s.shutdownSignal = shutdown
 	s.shutdownDone = done
 
 	s.WithShutdownSignalOK = true
-
-	return s
 }
 
 func (s *service) Start() error {
@@ -136,7 +134,11 @@ func TestServiceGroup_Start(t *testing.T) {
 			name: "start failed",
 			args: args{
 				log: func(_ context.Context, msg string) {
-					assert.Equal(t, "start service server at addr ::0", msg)
+					assert.Contains(t,
+						[]string{
+							"start service server at addr ::0",
+							"failed to start service server at addr ::0: service failed to start",
+						}, msg)
 				},
 				srv: newService(errFailedStart),
 			},
@@ -203,7 +205,7 @@ func TestServiceGroup_Start_timeout(t *testing.T) {
 
 	go func() {
 		err := sg.Start(context.Background(), time.Millisecond, nil, srv)
-		assert.EqualError(t, err, "shutdown deadline exceeded while waiting for service service to shutdown")
+		assert.EqualError(t, err, "shutdown deadline exceeded while waiting for service to shutdown: service")
 
 		close(done)
 	}()
@@ -217,7 +219,7 @@ func TestServiceGroup_Start_timeout(t *testing.T) {
 		return
 	case <-time.After(time.Second):
 		// Start successfully, proceed to close
-		sg.Close() //nolint:errcheck,gosec
+		_ = sg.Close() //nolint:errcheck
 	}
 
 	select {
@@ -254,7 +256,7 @@ func TestServiceGroup_Close(t *testing.T) {
 		return
 	case <-time.After(time.Second):
 		// Start successfully, proceed to close
-		sg.Close() //nolint:errcheck,gosec
+		_ = sg.Close() //nolint:errcheck
 	}
 
 	select {
@@ -277,7 +279,7 @@ func TestWithGracefulSutDown(t *testing.T) {
 		gracefulShutdownOK = true
 	}
 
-	sg := goservicing.WithGracefulSutDown(gracefulShutdownFunc)
+	sg := goservicing.WithGracefulShutDown(gracefulShutdownFunc)
 
 	done := make(chan error, 1)
 
@@ -307,4 +309,69 @@ func TestWithGracefulSutDown(t *testing.T) {
 	}
 
 	assert.Truef(t, gracefulShutdownOK, "Close() gracefulShutdownOK got = %t, want true", gracefulShutdownOK)
+}
+
+type standAlongService struct {
+	started bool
+	closed  bool
+}
+
+func (srv *standAlongService) Run() error {
+	srv.started = true
+
+	return nil
+}
+
+func (srv *standAlongService) Stop() {
+	srv.closed = true
+}
+
+func TestNewService(t *testing.T) {
+	srv := &standAlongService{}
+
+	sg := &goservicing.ServiceGroup{}
+
+	done := make(chan error, 1)
+
+	go func() {
+		err := sg.Start(
+			context.Background(),
+			time.Minute,
+			nil,
+			goservicing.NewService(
+				"standAlongService",
+				func() error {
+					return srv.Run()
+				},
+				func() { srv.Stop() },
+			),
+		)
+
+		done <- err
+
+		close(done)
+	}()
+
+	// wait for the service start
+	select {
+	case err := <-done:
+		// Start failed with error
+		require.Error(t, err)
+		assert.Fail(t, "failed to start")
+
+		return
+
+	case <-time.After(2 * time.Second):
+		// Start successfully, proceed to close
+		_ = sg.Close() //nolint:errcheck
+	}
+
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		assert.Fail(t, "failed to shutdown in reasonable time")
+	}
+
+	assert.True(t, srv.started)
+	assert.True(t, srv.closed)
 }

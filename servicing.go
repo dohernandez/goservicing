@@ -2,6 +2,7 @@ package goservicing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -9,16 +10,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bool64/ctxd"
 	"golang.org/x/sync/errgroup"
 )
 
+// ErrShutdownDeadlineExceeded occurs when shutdown deadline exceeded.
+var ErrShutdownDeadlineExceeded = errors.New("shutdown deadline exceeded while waiting for service to shutdown")
+
 // Service is an interface used by ServiceGroup.
 type Service interface {
-	WithShutdownSignal(shutdown <-chan struct{}, done chan<- struct{}) Service
+	WithShutdownSignal(shutdown <-chan struct{}, done chan<- struct{})
 	Start() error
 	Name() string
-	Addr() string
 }
 
 // GracefulShutdownFunc function used to close all opened connections gracefully.
@@ -34,12 +36,15 @@ type ServiceGroup struct {
 	gracefulShutdownFuncs []GracefulShutdownFunc
 }
 
-// WithGracefulSutDown returns a new ServiceGroup with GracefulShutdownFunc functions.
-func WithGracefulSutDown(gracefulShutdownFuncs ...GracefulShutdownFunc) *ServiceGroup {
+// WithGracefulShutDown returns a new ServiceGroup with GracefulShutdownFunc functions.
+func WithGracefulShutDown(gracefulShutdownFuncs ...GracefulShutdownFunc) *ServiceGroup {
 	return &ServiceGroup{
 		gracefulShutdownFuncs: gracefulShutdownFuncs,
 	}
 }
+
+// ErrSkipStart is a convenience error to skip service start.
+var ErrSkipStart = errors.New("skip start")
 
 // Start starts services synchronize and blocks until all services finishes by a notify signal.
 //
@@ -64,10 +69,24 @@ func (sg *ServiceGroup) Start(ctx context.Context, timeout time.Duration, log fu
 
 		g.Go(func() error {
 			if log != nil {
-				log(ctx, fmt.Sprintf("start %s server at addr %s", rsrv.Name(), rsrv.Addr()))
+				log(ctx, sg.startMessage(rsrv))
 			}
 
-			return rsrv.WithShutdownSignal(shutdownCh, shutdownDoneCh).Start()
+			var err error
+
+			defer func() {
+				if err != nil {
+					log(ctx, sg.errorMessage(rsrv, err))
+
+					return
+				}
+			}()
+
+			rsrv.WithShutdownSignal(shutdownCh, shutdownDoneCh)
+
+			err = rsrv.Start()
+
+			return err
 		})
 	}
 
@@ -84,6 +103,28 @@ func (sg *ServiceGroup) Start(ctx context.Context, timeout time.Duration, log fu
 	return err
 }
 
+func (sg *ServiceGroup) startMessage(srv Service) string {
+	msg := "start" + srv.Name()
+
+	if x, ok := srv.(interface{ Addr() string }); ok {
+		msg = fmt.Sprintf("%s server at addr %s", msg, x.Addr())
+	}
+
+	return msg
+}
+
+func (sg *ServiceGroup) errorMessage(srv Service, err error) string {
+	msg := "failed to start" + srv.Name()
+
+	if x, ok := srv.(interface{ Addr() string }); ok {
+		msg = fmt.Sprintf("%s server at addr %s", msg, x.Addr())
+	}
+
+	msg = fmt.Sprintf("%s: %v", msg, err)
+
+	return msg
+}
+
 func (sg *ServiceGroup) waitForSignal(
 	ctx context.Context,
 	shutdownCh chan struct{},
@@ -95,6 +136,13 @@ func (sg *ServiceGroup) waitForSignal(
 
 	signal.Stop(sg.sigint)
 
+	defer func() {
+		sg.mutex.Lock()
+		defer sg.mutex.Unlock()
+
+		close(sg.sigint)
+	}()
+
 	close(shutdownCh)
 
 	deadline := time.After(timeout)
@@ -104,7 +152,7 @@ func (sg *ServiceGroup) waitForSignal(
 		case <-shutdown:
 			continue
 		case <-deadline:
-			done <- ctxd.NewError(ctx, fmt.Sprintf("shutdown deadline exceeded while waiting for service %s to shutdown", srv))
+			done <- fmt.Errorf("%w: %s", ErrShutdownDeadlineExceeded, srv)
 		}
 	}
 
@@ -116,14 +164,115 @@ func (sg *ServiceGroup) waitForSignal(
 }
 
 // Close invokes services to termination.
-func (sg *ServiceGroup) Close() (err error) {
+func (sg *ServiceGroup) Close() error {
+	var err error
+
 	sg.mutex.Lock()
 	defer sg.mutex.Unlock()
 
 	if !sg.closed {
 		sg.closed = true
-		close(sg.sigint)
+
+		sg.sigint <- syscall.SIGINT
 	}
 
 	return err
+}
+
+type wrapService struct {
+	name string
+
+	startFunc func() error
+	stopFunc  func()
+
+	startFailed chan struct{}
+
+	shutdownSignal <-chan struct{}
+	shutdownDone   chan<- struct{}
+}
+
+// NewService creates new instance of Service.
+//
+// Example:
+//
+//	type Jop struct { ... }
+//
+//	// Run starts the job
+//	func (j *Job) Run() error {...}
+//
+//	// Stop stops the job
+//	func (j *Job) Stop() error {...}
+//
+//	j := &Job{}
+//
+//	sg := &ServiceGroup{}
+//
+//	err = servicing.Start(
+//		context.Background(),
+//		15*time.Second, // ttl is used during graceful shutdown.
+//		func(ctx context.Context, msg string) {
+//			log.Println(msg)
+//		},
+//		NewService(
+//			"Job A",
+//			func() error {
+//				return j.Run()
+//			},
+//			func() error {
+//				return j.Stop()
+//			},
+//		),
+//	)
+//	if err != nil {
+//		panic(fmt.Errorf("failed to start servicing: %w", err))
+//	}
+func NewService(name string, startFunc func() error, stopFunc func()) Service {
+	return &wrapService{
+		name:        name,
+		startFunc:   startFunc,
+		stopFunc:    stopFunc,
+		startFailed: make(chan struct{}),
+	}
+}
+
+// Start starts serving the server.
+func (wsrv *wrapService) Start() error {
+	go wsrv.handleShutdown()
+
+	err := wsrv.startFunc()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// handleShutdown will wait and handle shutdown signal that comes to the server
+// and gracefully shutdown the server.
+func (wsrv *wrapService) handleShutdown() {
+	if wsrv.shutdownSignal == nil {
+		return
+	}
+
+	select {
+	case <-wsrv.shutdownSignal:
+	case <-wsrv.startFailed:
+		return
+	}
+
+	wsrv.stopFunc()
+
+	close(wsrv.shutdownDone)
+	close(wsrv.startFailed)
+}
+
+// WithShutdownSignal adds channels to wait for shutdown and to report shutdown finished.
+func (wsrv *wrapService) WithShutdownSignal(shutdown <-chan struct{}, done chan<- struct{}) {
+	wsrv.shutdownSignal = shutdown
+	wsrv.shutdownDone = done
+}
+
+// Name Service name.
+func (wsrv *wrapService) Name() string {
+	return wsrv.name
 }

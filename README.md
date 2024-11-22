@@ -7,7 +7,17 @@
 
 Package to manage services start and graceful shutdown synchronize.
 
-### Example
+### Examples
+
+1. Implementing `Service interface`
+
+```go
+type Service interface {
+	WithShutdownSignal(shutdown <-chan struct{}, done chan<- struct{})
+	Start() error
+	Name() string
+}
+```
 
 ```go
 package main
@@ -113,4 +123,40 @@ func main() {
 	log.Fatalln(err)
 }
 
+```
+
+2. Using `NewService` creates new instance of Service.
+
+```go
+    type Jop struct { ... }
+
+	// Run starts the job
+	func (j *Job) Run() error {...}
+
+	// Stop stops the job
+	func (j *Job) Stop() error {...}
+
+	j := &Job{}
+
+	sg := &ServiceGroup{}
+
+	err = servicing.Start(
+		context.Background(),
+		15*time.Second, // ttl is used during graceful shutdown.
+		func(ctx context.Context, msg string) {
+			log.Println(msg)
+		},
+		NewService(
+			"Job A",
+			func() error {
+				return j.Run()
+			},
+			func() error {
+				return j.Stop()
+			},
+		),
+	)
+	if err != nil {
+		panic(fmt.Errorf("failed to start servicing: %w", err))
+	}
 ```

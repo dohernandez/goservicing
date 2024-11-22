@@ -104,7 +104,7 @@ func (sg *ServiceGroup) Start(ctx context.Context, timeout time.Duration, log fu
 }
 
 func (sg *ServiceGroup) startMessage(srv Service) string {
-	msg := "start" + srv.Name()
+	msg := "start " + srv.Name()
 
 	if x, ok := srv.(interface{ Addr() string }); ok {
 		msg = fmt.Sprintf("%s server at addr %s", msg, x.Addr())
@@ -114,7 +114,7 @@ func (sg *ServiceGroup) startMessage(srv Service) string {
 }
 
 func (sg *ServiceGroup) errorMessage(srv Service, err error) string {
-	msg := "failed to start" + srv.Name()
+	msg := "failed to start " + srv.Name()
 
 	if x, ok := srv.(interface{ Addr() string }); ok {
 		msg = fmt.Sprintf("%s server at addr %s", msg, x.Addr())

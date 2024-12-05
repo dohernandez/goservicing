@@ -3,9 +3,9 @@ module github.com/dohernandez/goservicing
 go 1.23
 
 require (
-	github.com/bool64/dev v0.2.36
+	github.com/bool64/dev v0.2.37
 	github.com/stretchr/testify v1.10.0
-	golang.org/x/sync v0.9.0
+	golang.org/x/sync v0.10.0
 )
 
 require (

@@ -12,17 +12,24 @@ import (
 type worker struct {
 	sm sync.Mutex
 
+	serve chan struct{}
+
 	started bool
 	closed  bool
 }
 
 func (w *worker) Run() error {
 	w.sm.Lock()
-	defer w.sm.Unlock()
 
 	fmt.Println("worker started")
 
 	w.started = true
+
+	w.serve = make(chan struct{})
+
+	w.sm.Unlock()
+
+	<-w.serve
 
 	return nil
 }
@@ -38,6 +45,8 @@ func (w *worker) Stop() {
 	fmt.Println("worker closed")
 
 	w.closed = true
+
+	close(w.serve)
 }
 
 func ExampleNewService() {
@@ -79,14 +88,14 @@ func ExampleNewService() {
 
 		return
 
-	case <-time.After(2 * time.Second):
+	case <-time.After(time.Millisecond * 300):
 		// Start successfully, proceed to close
 		_ = sg.Close()
 	}
 
 	select {
 	case <-done:
-	case <-time.After(15 * time.Second):
+	case <-time.After(time.Second):
 		fmt.Println("failed to shutdown in reasonable time")
 	}
 

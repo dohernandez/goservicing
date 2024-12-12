@@ -132,7 +132,10 @@ func (sg *ServiceGroup) waitForSignal(
 	done chan error,
 	timeout time.Duration,
 ) {
-	<-sg.sigint
+	select {
+	case <-ctx.Done():
+	case <-sg.sigint:
+	}
 
 	signal.Stop(sg.sigint)
 

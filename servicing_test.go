@@ -16,6 +16,8 @@ import (
 type service struct {
 	name string
 	addr string
+	// Simulate servicing
+	serve chan struct{}
 
 	err error
 
@@ -31,9 +33,10 @@ type service struct {
 
 func newService(err error) *service {
 	return &service{
-		name: "service",
-		addr: "::0",
-		err:  err,
+		name:  "service",
+		addr:  "::0",
+		err:   err,
+		serve: make(chan struct{}),
 	}
 }
 
@@ -57,7 +60,9 @@ func (s *service) Start() error {
 
 	s.StartOK = true
 
-	s.handleShutdown()
+	go s.handleShutdown()
+
+	<-s.serve
 
 	return nil
 }
@@ -67,20 +72,21 @@ func (s *service) handleShutdown() {
 		return
 	}
 
-	go func() {
-		<-s.shutdownSignal
-
-		if s.sleepOnShutdownFunc != nil {
-			s.sleepOnShutdownFunc()
-
-			// to avoid WARNING: DATA RACE during. The intent is to simulate that the shutdown is taking more than expected
-			return
-		}
-
-		s.ServiceShutdownOK = true
-
+	defer func() {
 		close(s.shutdownDone)
+		close(s.serve)
 	}()
+
+	<-s.shutdownSignal
+
+	if s.sleepOnShutdownFunc != nil {
+		s.sleepOnShutdownFunc()
+
+		// to avoid WARNING: DATA RACE during. The intent is to simulate that the shutdown is taking more than expected
+		return
+	}
+
+	s.ServiceShutdownOK = true
 }
 
 func (s *service) Name() string {
@@ -176,7 +182,7 @@ func TestServiceGroup_Start(t *testing.T) {
 				assert.Falsef(t, srv.ServiceShutdownOK, "Start() ServiceShutdownOK got = %t, want false", srv.ServiceShutdownOK)
 
 				return
-			case <-time.After(time.Second):
+			case <-time.After(time.Millisecond * 100):
 				// Start successfully, proceed to kill
 				require.NoError(t, syscall.Kill(os.Getpid(), tt.syscallKill))
 			}
@@ -194,9 +200,9 @@ func TestServiceGroup_Start(t *testing.T) {
 	}
 }
 
-func TestServiceGroup_Start_timeout(t *testing.T) {
+func TestServiceGroup_Start_shutdown_timeout(t *testing.T) {
 	srv := newService(nil).WithSleepOnShutdown(func() {
-		time.Sleep(time.Second)
+		time.Sleep(time.Millisecond * 500)
 	})
 
 	sg := &goservicing.ServiceGroup{}
@@ -217,7 +223,7 @@ func TestServiceGroup_Start_timeout(t *testing.T) {
 		assert.Fail(t, "failed to start")
 
 		return
-	case <-time.After(time.Second):
+	case <-time.After(time.Millisecond * 300):
 		// Start successfully, proceed to close
 		_ = sg.Close() //nolint:errcheck
 	}
@@ -225,12 +231,12 @@ func TestServiceGroup_Start_timeout(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		assert.Fail(t, "Start_timeout() failed to shutdown in reasonable time")
+		assert.Fail(t, "Start_shutdown_timeout() failed to shutdown in timeout")
 	}
 
-	assert.Truef(t, srv.WithShutdownSignalOK, "Start_timeout() WithShutdownSignalOK got = %t, want true", srv.WithShutdownSignalOK)
-	assert.Truef(t, srv.StartOK, "Start_timeout() StartOK got = %t, want true", srv.StartOK)
-	assert.Falsef(t, srv.ServiceShutdownOK, "Start_timeout() ServiceShutdownOK got = %t, want false", srv.ServiceShutdownOK)
+	assert.Truef(t, srv.WithShutdownSignalOK, "Start_shutdown_timeout() WithShutdownSignalOK got = %t, want true", srv.WithShutdownSignalOK)
+	assert.Truef(t, srv.StartOK, "Start_shutdown_timeout() StartOK got = %t, want true", srv.StartOK)
+	assert.Falsef(t, srv.ServiceShutdownOK, "Start_shutdown_timeout() ServiceShutdownOK got = %t, want false", srv.ServiceShutdownOK)
 }
 
 func TestServiceGroup_Close(t *testing.T) {
@@ -313,21 +319,30 @@ func TestWithGracefulSutDown(t *testing.T) {
 
 type standAlongService struct {
 	started bool
+	serve   chan struct{}
 	closed  bool
 }
 
 func (srv *standAlongService) Run() error {
 	srv.started = true
 
+	<-srv.serve
+
 	return nil
 }
 
 func (srv *standAlongService) Stop() {
 	srv.closed = true
+
+	if srv.serve == nil {
+		return
+	}
+
+	close(srv.serve)
 }
 
 func TestNewService(t *testing.T) {
-	srv := &standAlongService{}
+	srv := &standAlongService{serve: make(chan struct{})}
 
 	sg := &goservicing.ServiceGroup{}
 
@@ -361,14 +376,14 @@ func TestNewService(t *testing.T) {
 
 		return
 
-	case <-time.After(2 * time.Second):
+	case <-time.After(time.Millisecond * 300):
 		// Start successfully, proceed to close
 		_ = sg.Close() //nolint:errcheck
 	}
 
 	select {
 	case <-done:
-	case <-time.After(15 * time.Second):
+	case <-time.After(time.Second):
 		assert.Fail(t, "failed to shutdown in reasonable time")
 	}
 

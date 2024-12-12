@@ -63,6 +63,7 @@ func (s *service) Start() error {
 	go s.handleShutdown()
 
 	<-s.serve
+	println("start service server at addr", s.addr)
 
 	return nil
 }
@@ -78,6 +79,7 @@ func (s *service) handleShutdown() {
 	}()
 
 	<-s.shutdownSignal
+	println("shutdown service")
 
 	if s.sleepOnShutdownFunc != nil {
 		s.sleepOnShutdownFunc()
